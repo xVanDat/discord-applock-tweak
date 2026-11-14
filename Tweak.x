@@ -9,6 +9,7 @@
 #define PREF_KEY_REASON  @"DiscordAppLock_Reason"
 
 static BOOL isCurrentlyLocked = NO;
+static BOOL isAuthenticating = NO;
 static NSTimeInterval lastBackgroundTime = 0;
 static UIView *lockOverlayView = nil;
 static UIButton *unlockButton = nil;
@@ -69,34 +70,50 @@ static NSString *getCustomReasonText() {
     return @"Mở khoá ứng dụng Discord";
 }
 
-// MARK: - UI Helpers
-static UIWindow *getAppKeyWindow() {
-    UIWindow *foundWindow = nil;
-    NSArray *windows = [UIApplication sharedApplication].windows;
-    for (UIWindow *window in windows) {
-        if (window.isKeyWindow) {
-            foundWindow = window;
-            break;
+// MARK: - Official App Icon Extractor
+static UIImage *getDiscordOfficialAppIcon() {
+    // 1. Look up primary icon in Info.plist
+    NSDictionary *infoPlist = [[NSBundle mainBundle] infoDictionary];
+    NSDictionary *bundleIcons = infoPlist[@"CFBundleIcons"];
+    NSDictionary *primaryIcon = bundleIcons[@"CFBundlePrimaryIcon"];
+    NSArray *iconFiles = primaryIcon[@"CFBundleIconFiles"];
+    NSString *iconName = iconFiles.lastObject;
+    if (iconName) {
+        UIImage *img = [UIImage imageNamed:iconName];
+        if (img) return img;
+    }
+
+    // 2. Try common Discord iOS icon asset names
+    NSArray *candidates = @[@"AppIcon60x60", @"AppIcon76x76", @"AppIcon", @"DiscordLogo", @"icon", @"Icon"];
+    for (NSString *cand in candidates) {
+        UIImage *img = [UIImage imageNamed:cand];
+        if (img) return img;
+    }
+
+    // 3. Scan bundle directory directly for compiled AppIcon png files
+    NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray *files = [fm contentsOfDirectoryAtPath:bundlePath error:nil];
+    for (NSString *file in files) {
+        if ([file hasPrefix:@"AppIcon"] && [file hasSuffix:@".png"]) {
+            UIImage *img = [UIImage imageWithContentsOfFile:[bundlePath stringByAppendingPathComponent:file]];
+            if (img) return img;
         }
     }
-    if (!foundWindow && windows.count > 0) {
-        foundWindow = windows.firstObject;
-    }
-    return foundWindow;
+
+    return nil;
 }
 
-// Draw a smooth Discord Clyde Logo
-static UIImage *createDiscordLogo(CGFloat size) {
+// Fallback drawing if bundle icon fails
+static UIImage *createDiscordVectorLogo(CGFloat size) {
     UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, 0.0);
 
     UIColor *discordBlurple = [UIColor colorWithRed:88.0/255.0 green:101.0/255.0 blue:242.0/255.0 alpha:1.0];
     [discordBlurple setFill];
 
-    // Background rounded circle
     UIBezierPath *bgCircle = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0, 0, size, size) cornerRadius:size * 0.28];
     [bgCircle fill];
 
-    // Inner icon shape
     UIColor *whiteColor = [UIColor whiteColor];
     [whiteColor setFill];
 
@@ -118,7 +135,6 @@ static UIImage *createDiscordLogo(CGFloat size) {
     [path closePath];
     [path fill];
 
-    // Eyes
     [discordBlurple setFill];
     UIBezierPath *leftEye = [UIBezierPath bezierPathWithOvalInRect:CGRectMake(36 * scale, 47 * scale, 10 * scale, 10 * scale)];
     [leftEye fill];
@@ -129,6 +145,22 @@ static UIImage *createDiscordLogo(CGFloat size) {
     UIImage *image = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
     return image;
+}
+
+// MARK: - UI Helpers
+static UIWindow *getAppKeyWindow() {
+    UIWindow *foundWindow = nil;
+    NSArray *windows = [UIApplication sharedApplication].windows;
+    for (UIWindow *window in windows) {
+        if (window.isKeyWindow) {
+            foundWindow = window;
+            break;
+        }
+    }
+    if (!foundWindow && windows.count > 0) {
+        foundWindow = windows.firstObject;
+    }
+    return foundWindow;
 }
 
 // Forward declaration
@@ -165,8 +197,16 @@ static void showLockOverlay() {
             [centerContainer.widthAnchor constraintEqualToAnchor:lockOverlayView.widthAnchor multiplier:0.85]
         ]];
 
-        // Discord Logo
-        UIImageView *logoImageView = [[UIImageView alloc] initWithImage:createDiscordLogo(90)];
+        // Official Discord Logo from App Bundle
+        UIImage *officialIcon = getDiscordOfficialAppIcon();
+        UIImageView *logoImageView = nil;
+        if (officialIcon) {
+            logoImageView = [[UIImageView alloc] initWithImage:officialIcon];
+            logoImageView.layer.cornerRadius = 20.0;
+            logoImageView.layer.masksToBounds = YES;
+        } else {
+            logoImageView = [[UIImageView alloc] initWithImage:createDiscordVectorLogo(90)];
+        }
         logoImageView.translatesAutoresizingMaskIntoConstraints = NO;
         logoImageView.layer.shadowColor = [UIColor blackColor].CGColor;
         logoImageView.layer.shadowOpacity = 0.35;
@@ -229,6 +269,9 @@ static void showLockOverlay() {
 
     lockOverlayView.frame = window.bounds;
     lockOverlayView.alpha = 1.0;
+    if (statusLabel) {
+        statusLabel.text = @"Discord đã khoá";
+    }
     if (lockOverlayView.superview == nil) {
         [window addSubview:lockOverlayView];
         [window bringSubviewToFront:lockOverlayView];
@@ -248,8 +291,15 @@ static void hideLockOverlayAnimated() {
 
 // MARK: - Biometric Trigger
 static void triggerBiometricAuth(BOOL isInteractive) {
+    if (isAuthenticating) {
+        NSLog(@"[DiscordAppLock] Biometric auth already in progress, skipping.");
+        return;
+    }
+
+    isAuthenticating = YES;
+
     LAContext *context = [[LAContext alloc] init];
-    context.localizedFallbackTitle = @"Nhập mật mã iPhone";
+    context.localizedFallbackTitle = @"Nhập mật mã";
 
     NSString *reason = getCustomReasonText();
 
@@ -259,19 +309,26 @@ static void triggerBiometricAuth(BOOL isInteractive) {
                 localizedReason:reason
                           reply:^(BOOL success, NSError *error) {
             dispatch_async(dispatch_get_main_queue(), ^{
+                isAuthenticating = NO;
                 if (success) {
                     isCurrentlyLocked = NO;
                     hideLockOverlayAnimated();
                     AudioServicesPlaySystemSound(1519); // Peek feedback
                 } else {
                     isCurrentlyLocked = YES;
-                    statusLabel.text = @"Xác thực không thành công";
-                    AudioServicesPlaySystemSound(1521); // Error feedback
+                    // Ignore user cancel or system cancel (don't vibrate or show red failure text)
+                    if (error.code == LAErrorUserCancel || error.code == LAErrorSystemCancel || error.code == LAErrorAppCancel) {
+                        statusLabel.text = @"Discord đã khoá";
+                    } else {
+                        statusLabel.text = @"Xác thực không thành công";
+                        AudioServicesPlaySystemSound(1521); // Error feedback
+                    }
                 }
             });
         }];
     } else {
         dispatch_async(dispatch_get_main_queue(), ^{
+            isAuthenticating = NO;
             statusLabel.text = @"Thiết bị không hỗ trợ xác thực";
         });
     }
@@ -308,10 +365,13 @@ static void handleDidBecomeActive(NSNotification *note) {
         return;
     }
 
-    // Must lock & prompt
+    // Must lock & prompt (only if not already authenticating!)
     isCurrentlyLocked = YES;
     showLockOverlay();
-    triggerBiometricAuth(NO);
+
+    if (!isAuthenticating) {
+        triggerBiometricAuth(NO);
+    }
 }
 
 // MARK: - React Native Native Module (DCDLocalAuth)
