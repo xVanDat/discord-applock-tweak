@@ -7,7 +7,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = DiscordAppLock
 
 DiscordAppLock_FILES = Tweak.x
-DiscordAppLock_CFLAGS = -fobjc-arc
+DiscordAppLock_CFLAGS = -fobjc-arc -Wno-unused-variable -Wno-error
 DiscordAppLock_FRAMEWORKS = UIKit LocalAuthentication CoreGraphics QuartzCore AudioToolbox
 
 include $(THEOS_MAKE_PATH)/tweak.mk

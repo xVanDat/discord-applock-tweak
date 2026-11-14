@@ -88,7 +88,6 @@ static UIWindow *getAppKeyWindow() {
 // Draw a smooth Discord Clyde Logo
 static UIImage *createDiscordLogo(CGFloat size) {
     UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, 0.0);
-    CGContextRef ctx = UIGraphicsGetCurrentContext();
 
     UIColor *discordBlurple = [UIColor colorWithRed:88.0/255.0 green:101.0/255.0 blue:242.0/255.0 alpha:1.0];
     [discordBlurple setFill];
@@ -162,8 +161,8 @@ static void showLockOverlay() {
 
         [NSLayoutConstraint activateConstraints:@[
             [centerContainer.centerXAnchor constraintEqualToAnchor:lockOverlayView.centerXAnchor],
-            [centerContainer.centerYAnchor constraintEqualToAnchor:lockOverlayView.centerYAnchor, constant:-20.0],
-            [centerContainer.widthAnchor constraintEqualToAnchor:lockOverlayView.widthAnchor, multiplier:0.85]
+            [centerContainer.centerYAnchor constraintEqualToAnchor:lockOverlayView.centerYAnchor constant:-20.0],
+            [centerContainer.widthAnchor constraintEqualToAnchor:lockOverlayView.widthAnchor multiplier:0.85]
         ]];
 
         // Discord Logo
