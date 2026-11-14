@@ -1,0 +1,48 @@
+name: Build Discord AppLock Deb
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Theos
+        uses: actions/cache@v4
+        id: theos-cache
+        with:
+          path: ~/theos
+          key: theos-${{ runner.os }}
+
+      - name: Install Theos & Toolchain
+        run: |
+          if [ ! -d "$HOME/theos" ]; then
+            git clone --recursive https://github.com/theos/theos.git ~/theos
+          fi
+          # Download iOS 16.5 SDK
+          curl -LO https://github.com/xybp888/iOS-SDKs/releases/download/iOS-16.5/iPhoneOS16.5.sdk.tar.xz
+          tar -xf iPhoneOS16.5.sdk.tar.xz
+          mv iPhoneOS16.5.sdk ~/theos/sdks/
+          rm iPhoneOS16.5.sdk.tar.xz
+
+      - name: Build .deb Package
+        env:
+          THEOS: ${{ github.workspace }}/../theos
+        run: |
+          export THEOS=~/theos
+          make clean
+          make package FINALPACKAGE=1
+
+      - name: Upload .deb Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DiscordAppLock-deb
+          path: packages/*.deb

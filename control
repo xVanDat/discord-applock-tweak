@@ -1,0 +1,9 @@
+Package: com.vandat.discordapplock
+Name: Discord AppLock
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: Native biometric (Touch ID / Face ID) lock and App Switcher privacy overlay for Discord iOS.
+Maintainer: xVanDat
+Author: xVanDat
+Section: Tweaks
+Depends: mobilesubstrate (>= 0.9.5000)
