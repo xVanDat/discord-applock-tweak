@@ -14,65 +14,63 @@ static NSTimeInterval lastBackgroundTime = 0;
 static UIView *lockOverlayView = nil;
 static UIButton *unlockButton = nil;
 static UILabel *statusLabel = nil;
+static UILabel *subLabel = nil;
 
-// MARK: - Config Helper (Reads shared config from Documents/applock_config.json or NSUserDefaults)
-static NSDictionary *loadSharedConfig() {
-    NSArray *paths = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES);
-    if (paths.count == 0) return nil;
-    NSString *configPath = [paths.firstObject stringByAppendingPathComponent:@"applock_config.json"];
-    NSData *data = [NSData dataWithContentsOfFile:configPath];
-    if (!data) return nil;
-    NSError *error = nil;
-    id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
-    if ([json isKindOfClass:[NSDictionary class]]) {
-        return (NSDictionary *)json;
-    }
-    return nil;
+// MARK: - Preferences Helper (Directly from NSUserDefaults)
+static NSUserDefaults *getPrefs() {
+    return [NSUserDefaults standardUserDefaults];
 }
 
 static BOOL isLockEnabled() {
-    NSDictionary *cfg = loadSharedConfig();
-    if (cfg && cfg[@"enabled"] != nil) {
-        return [cfg[@"enabled"] boolValue];
-    }
-    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    NSUserDefaults *defaults = getPrefs();
     if ([defaults objectForKey:PREF_KEY_ENABLED] == nil) {
         return YES; // Default enabled
     }
     return [defaults boolForKey:PREF_KEY_ENABLED];
 }
 
+static void setLockEnabled(BOOL enabled) {
+    [getPrefs() setBool:enabled forKey:PREF_KEY_ENABLED];
+    [getPrefs() synchronize];
+}
+
 static NSInteger getOverlayStyle() {
-    NSDictionary *cfg = loadSharedConfig();
-    if (cfg && cfg[@"overlayStyle"] != nil) {
-        return [cfg[@"overlayStyle"] integerValue];
+    NSUserDefaults *defaults = getPrefs();
+    if ([defaults objectForKey:PREF_KEY_STYLE] == nil) {
+        return 1; // Default 1 = Discord Logo
     }
-    return [[NSUserDefaults standardUserDefaults] integerForKey:PREF_KEY_STYLE];
+    return [defaults integerForKey:PREF_KEY_STYLE];
+}
+
+static void setOverlayStyle(NSInteger style) {
+    [getPrefs() setInteger:style forKey:PREF_KEY_STYLE];
+    [getPrefs() synchronize];
 }
 
 static NSInteger getTimeoutSeconds() {
-    NSDictionary *cfg = loadSharedConfig();
-    if (cfg && cfg[@"timeout"] != nil) {
-        return [cfg[@"timeout"] integerValue];
-    }
-    return [[NSUserDefaults standardUserDefaults] integerForKey:PREF_KEY_TIMEOUT];
+    return [getPrefs() integerForKey:PREF_KEY_TIMEOUT];
+}
+
+static void setTimeoutSeconds(NSInteger timeout) {
+    [getPrefs() setInteger:timeout forKey:PREF_KEY_TIMEOUT];
+    [getPrefs() synchronize];
 }
 
 static NSString *getCustomReasonText() {
-    NSDictionary *cfg = loadSharedConfig();
-    if (cfg && [cfg[@"customReason"] isKindOfClass:[NSString class]] && [cfg[@"customReason"] length] > 0) {
-        return cfg[@"customReason"];
-    }
-    NSString *def = [[NSUserDefaults standardUserDefaults] stringForKey:PREF_KEY_REASON];
-    if (def && def.length > 0) {
-        return def;
+    NSString *reason = [getPrefs() stringForKey:PREF_KEY_REASON];
+    if (reason && reason.length > 0) {
+        return reason;
     }
     return @"Mở khoá ứng dụng Discord";
 }
 
+static void setCustomReasonText(NSString *reason) {
+    [getPrefs() setObject:reason forKey:PREF_KEY_REASON];
+    [getPrefs() synchronize];
+}
+
 // MARK: - Official App Icon Extractor
 static UIImage *getDiscordOfficialAppIcon() {
-    // 1. Look up primary icon in Info.plist
     NSDictionary *infoPlist = [[NSBundle mainBundle] infoDictionary];
     NSDictionary *bundleIcons = infoPlist[@"CFBundleIcons"];
     NSDictionary *primaryIcon = bundleIcons[@"CFBundlePrimaryIcon"];
@@ -83,14 +81,12 @@ static UIImage *getDiscordOfficialAppIcon() {
         if (img) return img;
     }
 
-    // 2. Try common Discord iOS icon asset names
     NSArray *candidates = @[@"AppIcon60x60", @"AppIcon76x76", @"AppIcon", @"DiscordLogo", @"icon", @"Icon"];
     for (NSString *cand in candidates) {
         UIImage *img = [UIImage imageNamed:cand];
         if (img) return img;
     }
 
-    // 3. Scan bundle directory directly for compiled AppIcon png files
     NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
     NSFileManager *fm = [NSFileManager defaultManager];
     NSArray *files = [fm contentsOfDirectoryAtPath:bundlePath error:nil];
@@ -104,7 +100,6 @@ static UIImage *getDiscordOfficialAppIcon() {
     return nil;
 }
 
-// Fallback drawing if bundle icon fails
 static UIImage *createDiscordVectorLogo(CGFloat size) {
     UIGraphicsBeginImageContextWithOptions(CGSizeMake(size, size), NO, 0.0);
 
@@ -163,8 +158,9 @@ static UIWindow *getAppKeyWindow() {
     return foundWindow;
 }
 
-// Forward declaration
+// Forward declarations
 static void triggerBiometricAuth(BOOL isInteractive);
+static void showSettingsActionSheet();
 
 // MARK: - Lock Overlay Creation
 static void showLockOverlay() {
@@ -174,11 +170,10 @@ static void showLockOverlay() {
     if (!lockOverlayView) {
         lockOverlayView = [[UIView alloc] initWithFrame:window.bounds];
         lockOverlayView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        lockOverlayView.backgroundColor = [UIColor colorWithRed:24.0/255.0 green:25.0/255.0 blue:28.0/255.0 alpha:1.0]; // Discord Dark #18191c
+        lockOverlayView.backgroundColor = [UIColor colorWithRed:24.0/255.0 green:25.0/255.0 blue:28.0/255.0 alpha:1.0]; // Discord Dark
 
         NSInteger style = getOverlayStyle();
         if (style == 0) {
-            // Blur Effect
             UIBlurEffect *blurEffect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
             UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blurEffect];
             blurView.frame = lockOverlayView.bounds;
@@ -186,7 +181,6 @@ static void showLockOverlay() {
             [lockOverlayView addSubview:blurView];
         }
 
-        // Center Container
         UIView *centerContainer = [[UIView alloc] init];
         centerContainer.translatesAutoresizingMaskIntoConstraints = NO;
         [lockOverlayView addSubview:centerContainer];
@@ -197,7 +191,6 @@ static void showLockOverlay() {
             [centerContainer.widthAnchor constraintEqualToAnchor:lockOverlayView.widthAnchor multiplier:0.85]
         ]];
 
-        // Official Discord Logo from App Bundle
         UIImage *officialIcon = getDiscordOfficialAppIcon();
         UIImageView *logoImageView = nil;
         if (officialIcon) {
@@ -214,7 +207,6 @@ static void showLockOverlay() {
         logoImageView.layer.shadowRadius = 8.0;
         [centerContainer addSubview:logoImageView];
 
-        // Status Label
         statusLabel = [[UILabel alloc] init];
         statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
         statusLabel.text = @"Discord đã khoá";
@@ -223,7 +215,7 @@ static void showLockOverlay() {
         statusLabel.textAlignment = NSTextAlignmentCenter;
         [centerContainer addSubview:statusLabel];
 
-        UILabel *subLabel = [[UILabel alloc] init];
+        subLabel = [[UILabel alloc] init];
         subLabel.translatesAutoresizingMaskIntoConstraints = NO;
         subLabel.text = getCustomReasonText();
         subLabel.textColor = [UIColor colorWithWhite:0.75 alpha:1.0];
@@ -231,13 +223,12 @@ static void showLockOverlay() {
         subLabel.textAlignment = NSTextAlignmentCenter;
         [centerContainer addSubview:subLabel];
 
-        // Unlock Button
         unlockButton = [UIButton buttonWithType:UIButtonTypeSystem];
         unlockButton.translatesAutoresizingMaskIntoConstraints = NO;
         [unlockButton setTitle:@"Mở khoá Discord" forState:UIControlStateNormal];
         [unlockButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
         unlockButton.titleLabel.font = [UIFont systemFontOfSize:16 weight:UIFontWeightSemibold];
-        unlockButton.backgroundColor = [UIColor colorWithRed:88.0/255.0 green:101.0/255.0 blue:242.0/255.0 alpha:1.0]; // Blurple
+        unlockButton.backgroundColor = [UIColor colorWithRed:88.0/255.0 green:101.0/255.0 blue:242.0/255.0 alpha:1.0];
         unlockButton.layer.cornerRadius = 22.0;
         unlockButton.clipsToBounds = YES;
         [unlockButton addTarget:[NSBlockOperation blockOperationWithBlock:^{
@@ -272,6 +263,9 @@ static void showLockOverlay() {
     if (statusLabel) {
         statusLabel.text = @"Discord đã khoá";
     }
+    if (subLabel) {
+        subLabel.text = getCustomReasonText();
+    }
     if (lockOverlayView.superview == nil) {
         [window addSubview:lockOverlayView];
         [window bringSubviewToFront:lockOverlayView];
@@ -291,8 +285,8 @@ static void hideLockOverlayAnimated() {
 
 // MARK: - Biometric Trigger
 static void triggerBiometricAuth(BOOL isInteractive) {
-    if (isAuthenticating) {
-        NSLog(@"[DiscordAppLock] Biometric auth already in progress, skipping.");
+    // If already authenticating or not locked, do not trigger duplicate prompt!
+    if (isAuthenticating || !isCurrentlyLocked) {
         return;
     }
 
@@ -312,11 +306,11 @@ static void triggerBiometricAuth(BOOL isInteractive) {
                 isAuthenticating = NO;
                 if (success) {
                     isCurrentlyLocked = NO;
+                    lastBackgroundTime = [NSDate timeIntervalSinceReferenceDate];
                     hideLockOverlayAnimated();
-                    AudioServicesPlaySystemSound(1519); // Peek feedback
+                    AudioServicesPlaySystemSound(1519); // Success feedback
                 } else {
                     isCurrentlyLocked = YES;
-                    // Ignore user cancel or system cancel (don't vibrate or show red failure text)
                     if (error.code == LAErrorUserCancel || error.code == LAErrorSystemCancel || error.code == LAErrorAppCancel) {
                         statusLabel.text = @"Discord đã khoá";
                     } else {
@@ -336,28 +330,47 @@ static void triggerBiometricAuth(BOOL isInteractive) {
 
 // MARK: - App Lifecycle Notifications
 static void handleWillResignActive(NSNotification *note) {
+    // CRITICAL FIX: If authentication is currently in progress,
+    // this notification is caused by Touch ID / Passcode prompt appearing!
+    // We MUST ignore it so we don't relock or interfere with the prompt!
+    if (isAuthenticating) {
+        return;
+    }
+
     if (!isLockEnabled()) return;
 
-    // Immediately show overlay synchronously before App Switcher snapshot is captured by iOS
+    // Truly entering App Switcher or leaving app
     isCurrentlyLocked = YES;
     showLockOverlay();
 }
 
 static void handleDidEnterBackground(NSNotification *note) {
+    if (isAuthenticating) return;
     lastBackgroundTime = [NSDate timeIntervalSinceReferenceDate];
 }
 
 static void handleDidBecomeActive(NSNotification *note) {
+    // CRITICAL FIX: If we just finished authenticating or are in the middle of it,
+    // this notification is caused by Touch ID / Passcode dismissing!
+    // DO NOT TRIGGER A DUPLICATE PROMPT!
+    if (isAuthenticating) {
+        return;
+    }
+
     if (!isLockEnabled()) {
         hideLockOverlayAnimated();
         isCurrentlyLocked = NO;
         return;
     }
 
+    if (!isCurrentlyLocked) {
+        // App is already unlocked! Do nothing!
+        return;
+    }
+
+    // Check timeout
     NSInteger timeout = getTimeoutSeconds();
     NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
-
-    // Check if timeout elapsed
     if (timeout > 0 && lastBackgroundTime > 0 && (now - lastBackgroundTime) < timeout) {
         // Within grace period
         isCurrentlyLocked = NO;
@@ -365,23 +378,138 @@ static void handleDidBecomeActive(NSNotification *note) {
         return;
     }
 
-    // Must lock & prompt (only if not already authenticating!)
-    isCurrentlyLocked = YES;
+    // Must lock & prompt
     showLockOverlay();
-
-    if (!isAuthenticating) {
-        triggerBiometricAuth(NO);
-    }
+    triggerBiometricAuth(NO);
 }
 
-// MARK: - React Native Native Module (DCDLocalAuth)
-@interface DCDLocalAuth : NSObject
+// MARK: - 3-Finger Long Press Settings Gesture
+@interface DiscordAppLockGestureHandler : NSObject
++ (instancetype)shared;
+- (void)handleThreeFingerPress:(UILongPressGestureRecognizer *)gesture;
 @end
 
-@implementation DCDLocalAuth
+@implementation DiscordAppLockGestureHandler
+
++ (instancetype)shared {
+    static DiscordAppLockGestureHandler *inst = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        inst = [[DiscordAppLockGestureHandler alloc] init];
+    });
+    return inst;
+}
+
+- (void)handleThreeFingerPress:(UILongPressGestureRecognizer *)gesture {
+    if (gesture.state != UIGestureRecognizerStateBegan) return;
+
+    // Haptic feedback
+    AudioServicesPlaySystemSound(1519);
+
+    // Require biometric auth before opening settings to prevent unauthorized tampering!
+    LAContext *context = [[LAContext alloc] init];
+    [context evaluatePolicy:LAPolicyDeviceOwnerAuthentication
+            localizedReason:@"Xác thực để mở Cài đặt Discord AppLock"
+                      reply:^(BOOL success, NSError *error) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (success) {
+                showSettingsActionSheet();
+            }
+        });
+    }];
+}
+
+@end
+
+static void showSettingsActionSheet() {
+    UIWindow *window = getAppKeyWindow();
+    UIViewController *rootVC = window.rootViewController;
+    while (rootVC.presentedViewController) {
+        rootVC = rootVC.presentedViewController;
+    }
+    if (!rootVC) return;
+
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"🔒 Cài đặt Discord AppLock"
+                                                                   message:@"Tuỳ chỉnh tính năng bảo mật sinh trắc học và che màn hình đa nhiệm"
+                                                            preferredStyle:UIAlertControllerStyleActionSheet];
+
+    // 1. Toggle Lock
+    BOOL enabled = isLockEnabled();
+    NSString *toggleTitle = enabled ? @"✅ Khoá Touch ID / Face ID: [ĐANG BẬT]" : @"❌ Khoá Touch ID / Face ID: [ĐANG TẮT]";
+    [alert addAction:[UIAlertAction actionWithTitle:toggleTitle style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        setLockEnabled(!enabled);
+        showSettingsActionSheet();
+    }]];
+
+    // 2. Overlay Style
+    NSInteger style = getOverlayStyle();
+    NSString *styleTitle = (style == 1) ? @"🖼 Kiểu che: [Logo Discord]" : @"🌫 Kiểu che: [Làm mờ Blur]";
+    [alert addAction:[UIAlertAction actionWithTitle:styleTitle style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        setOverlayStyle(style == 1 ? 0 : 1);
+        showSettingsActionSheet();
+    }]];
+
+    // 3. Timeout Selection
+    NSInteger timeout = getTimeoutSeconds();
+    NSString *timeoutStr = (timeout == 0) ? @"Ngay lập tức" : (timeout == 30) ? @"30 giây" : (timeout == 60) ? @"1 phút" : [NSString stringWithFormat:@"%ld giây", (long)timeout];
+    NSString *timeoutTitle = [NSString stringWithFormat:@"⏱ Thời gian khoá lại: [%@]", timeoutStr];
+    [alert addAction:[UIAlertAction actionWithTitle:timeoutTitle style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        UIAlertController *timeoutAlert = [UIAlertController alertControllerWithTitle:@"Thời gian khoá lại" message:@"Chọn khoảng thời gian không hỏi lại vân tay khi quay lại app" preferredStyle:UIAlertControllerStyleActionSheet];
+        [timeoutAlert addAction:[UIAlertAction actionWithTitle:@"Ngay lập tức (Mặc định)" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) { setTimeoutSeconds(0); }]];
+        [timeoutAlert addAction:[UIAlertAction actionWithTitle:@"Sau 30 giây" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) { setTimeoutSeconds(30); }]];
+        [timeoutAlert addAction:[UIAlertAction actionWithTitle:@"Sau 1 phút" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) { setTimeoutSeconds(60); }]];
+        [timeoutAlert addAction:[UIAlertAction actionWithTitle:@"Sau 5 phút" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) { setTimeoutSeconds(300); }]];
+        [timeoutAlert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
+        [rootVC presentViewController:timeoutAlert animated:YES completion:nil];
+    }]];
+
+    // 4. Custom Reason Text
+    [alert addAction:[UIAlertAction actionWithTitle:@"✏️ Đổi lời nhắn xác thực (Subtitle)..." style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        UIAlertController *promptAlert = [UIAlertController alertControllerWithTitle:@"Đổi lời nhắn xác thực"
+                                                                             message:@"Nhập câu chữ hiển thị dưới bảng Touch ID / Face ID"
+                                                                      preferredStyle:UIAlertControllerStyleAlert];
+        [promptAlert addTextFieldWithConfigurationHandler:^(UITextField *textField) {
+            textField.text = getCustomReasonText();
+            textField.placeholder = @"Ví dụ: Mở khoá tin nhắn bí mật";
+            textField.clearButtonMode = UITextFieldViewModeWhileEditing;
+        }];
+        [promptAlert addAction:[UIAlertAction actionWithTitle:@"Lưu" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            UITextField *tf = promptAlert.textFields.firstObject;
+            if (tf.text && tf.text.length > 0) {
+                setCustomReasonText(tf.text);
+            }
+        }]];
+        [promptAlert addAction:[UIAlertAction actionWithTitle:@"Hủy" style:UIAlertActionStyleCancel handler:nil]];
+        [rootVC presentViewController:promptAlert animated:YES completion:nil];
+    }]];
+
+    [alert addAction:[UIAlertAction actionWithTitle:@"Đóng" style:UIAlertActionStyleCancel handler:nil]];
+
+    [rootVC presentViewController:alert animated:YES completion:nil];
+}
+
+static void attachThreeFingerGestureToWindow(UIWindow *window) {
+    if (!window) return;
+    for (UIGestureRecognizer *g in window.gestureRecognizers) {
+        if ([g isKindOfClass:[UILongPressGestureRecognizer class]] && ((UILongPressGestureRecognizer *)g).numberOfTouchesRequired == 3) {
+            return; // Already attached
+        }
+    }
+
+    UILongPressGestureRecognizer *recognizer = [[UILongPressGestureRecognizer alloc] initWithTarget:[DiscordAppLockGestureHandler shared] action:@selector(handleThreeFingerPress:)];
+    recognizer.numberOfTouchesRequired = 3;
+    recognizer.minimumPressDuration = 0.7;
+    recognizer.cancelsTouchesInView = NO;
+    [window addGestureRecognizer:recognizer];
+}
+
+// MARK: - Lifecycle Observer
+@interface DiscordAppLockObserver : NSObject
+@end
+
+@implementation DiscordAppLockObserver
 
 + (void)load {
-    // Register lifecycle observers
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationWillResignActiveNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
@@ -395,12 +523,18 @@ static void handleDidBecomeActive(NSNotification *note) {
     [[NSNotificationCenter defaultCenter] addObserverForName:UIApplicationDidBecomeActiveNotification
                                                       object:nil
                                                        queue:[NSOperationQueue mainQueue]
-                                                  usingBlock:^(NSNotification *note) { handleDidBecomeActive(note); }];
+                                                  usingBlock:^(NSNotification *note) {
+        UIWindow *window = getAppKeyWindow();
+        if (window) {
+            attachThreeFingerGestureToWindow(window);
+        }
+        handleDidBecomeActive(note);
+    }];
 }
 
 @end
 
 // MARK: - Constructor
 %ctor {
-    NSLog(@"[DiscordAppLock] Native Tweak Initialized successfully!");
+    NSLog(@"[DiscordAppLock] Native Tweak Initialized with 3-finger gesture settings!");
 }
