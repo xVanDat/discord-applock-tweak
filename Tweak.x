@@ -170,15 +170,17 @@ static void showLockOverlay() {
     if (!lockOverlayView) {
         lockOverlayView = [[UIView alloc] initWithFrame:window.bounds];
         lockOverlayView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        lockOverlayView.backgroundColor = [UIColor colorWithRed:24.0/255.0 green:25.0/255.0 blue:28.0/255.0 alpha:1.0]; // Discord Dark
 
         NSInteger style = getOverlayStyle();
         if (style == 0) {
+            lockOverlayView.backgroundColor = [UIColor clearColor];
             UIBlurEffect *blurEffect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleDark];
             UIVisualEffectView *blurView = [[UIVisualEffectView alloc] initWithEffect:blurEffect];
             blurView.frame = lockOverlayView.bounds;
             blurView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
             [lockOverlayView addSubview:blurView];
+        } else {
+            lockOverlayView.backgroundColor = [UIColor colorWithRed:24.0/255.0 green:25.0/255.0 blue:28.0/255.0 alpha:1.0]; // Discord Dark
         }
 
         UIView *centerContainer = [[UIView alloc] init];
@@ -402,16 +404,19 @@ static void handleDidBecomeActive(NSNotification *note) {
 
 - (void)handleThreeFingerPress:(UILongPressGestureRecognizer *)gesture {
     if (gesture.state != UIGestureRecognizerStateBegan) return;
+    if (isAuthenticating || isCurrentlyLocked) return;
 
     // Haptic feedback
     AudioServicesPlaySystemSound(1519);
 
     // Require biometric auth before opening settings to prevent unauthorized tampering!
+    isAuthenticating = YES;
     LAContext *context = [[LAContext alloc] init];
     [context evaluatePolicy:LAPolicyDeviceOwnerAuthentication
             localizedReason:@"Xác thực để mở Cài đặt Discord AppLock"
                       reply:^(BOOL success, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
+            isAuthenticating = NO;
             if (success) {
                 showSettingsActionSheet();
             }
